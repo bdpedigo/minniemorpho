@@ -13,22 +13,25 @@ jobs:
       # IMPORTANT: this permission is mandatory for trusted publishing
       id-token: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: main
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.11"
-      - name: Set up uv
-        uses: yezz123/setup-uv@v4
-      - name: Install dependencies and build
-        run: uv tool --from build pyproject-build --installer uv
-      #   - name: Upload artifacts
-      #     uses: actions/upload-artifact@v2
+      #   - name: Checkout
+      #     uses: actions/checkout@v4
       #     with:
+      #       ref: main
+      #   - name: Set up Python
+      #     uses: actions/setup-python@v4
+      #     with:
+      #       python-version: "3.11"
+      #   - name: Set up uv
+      #     uses: yezz123/setup-uv@v4
+      #   - name: Install dependencies and build
+      #     run: uv tool --from build pyproject-build --installer uv
+      #
       #       name: distributions
       # retrieve your distributions here
+      - name: Download all the dists
+        uses: actions/download-artifact@v3
+        with:
+          name: python-package-distributions
+          path: dist/
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
