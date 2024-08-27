@@ -22,7 +22,7 @@ jobs:
       - name: Set up uv
         uses: yezz123/setup-uv@v4
       - name: Install dependencies and build
-        run: uv tool --from build pyproject-build --installer uv
+        run: uv tool run --from build pyproject-build --installer uv
       - name: Upload artifacts
         uses: actions/upload-artifact@v2
         with:
