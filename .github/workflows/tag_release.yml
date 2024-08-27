@@ -23,6 +23,10 @@ jobs:
         uses: yezz123/setup-uv@v4
       - name: Install dependencies and build
         run: uv tool run --from build pyproject-build --installer uv
+      - name: Configure git for github-actions[bot]
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
       - name: Upload artifacts
         uses: actions/upload-artifact@v2
         with:
