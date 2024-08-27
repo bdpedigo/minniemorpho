@@ -1,17 +1,23 @@
+from time import sleep
+
 import gcsfs
 import numpy as np
 import pandas as pd
-from connectomics.segclr import reader
 from joblib import Parallel, delayed
 from numpy.typing import ArrayLike
 from sklearn.neighbors import NearestNeighbors
 from tqdm_joblib import tqdm_joblib
+
+from connectomics.segclr import reader
 
 from ..base import BaseQuery
 
 
 def _format_l2_data(level2_data: dict) -> pd.DataFrame:
     level2_data = pd.DataFrame(level2_data).T
+
+    # TODO handle empty cache better
+    # TODO just make this happen all at once with a single apply/
     level2_data["x"] = level2_data["rep_coord_nm"].apply(
         lambda x: x[0] if x is not None else None
     )
@@ -21,6 +27,7 @@ def _format_l2_data(level2_data: dict) -> pd.DataFrame:
     level2_data["z"] = level2_data["rep_coord_nm"].apply(
         lambda x: x[2] if x is not None else None
     )
+
     level2_data.index.name = "level2_id"
     level2_data.index = level2_data.index.astype(int)
     return level2_data
@@ -50,7 +57,7 @@ class SegCLRQuery(BaseQuery):
         chunks = np.array_split(root_ids, n_chunks)
 
         with tqdm_joblib(
-            desc="Getting IDs at SegCLR version...",
+            desc="Getting IDs at SegCLR version",
             total=n_chunks,
             disable=self.verbose < 1,
         ):
@@ -94,7 +101,7 @@ class SegCLRQuery(BaseQuery):
 
         versioned_query_ids = self.versioned_query_ids_
         with tqdm_joblib(
-            desc="Getting embeddings...",
+            desc="Getting SegCLR embeddings",
             total=len(versioned_query_ids),
             disable=self.verbose < 1,
         ):
@@ -130,32 +137,41 @@ class SegCLRQuery(BaseQuery):
         self.features_ = embedding_df
 
     def map_to_level2(self):
-        def _map_to_level2_for_root(root_id, root_data):
-            level2_ids = self.client.chunkedgraph.get_leaves(root_id, stop_layer=2)
-            level2_data = self.client.l2cache.get_l2data(level2_ids)
-            level2_data = _format_l2_data(level2_data)
+        def _map_to_level2_for_root(root_id, root_data, n_tries=3):
+            try:
+                level2_ids = self.client.chunkedgraph.get_leaves(root_id, stop_layer=2)
+                level2_data = self.client.l2cache.get_l2data(level2_ids)
+                level2_data = _format_l2_data(level2_data)
 
-            nn = NearestNeighbors(n_neighbors=1)
-            nn.fit(level2_data[["x", "y", "z"]].values)
-            distances, indices = nn.kneighbors(
-                root_data.reset_index()[["x", "y", "z"]].values
-            )
-            distances = distances.squeeze()
-            indices = indices.squeeze()
+                nn = NearestNeighbors(n_neighbors=1)
+                nn.fit(level2_data[["x", "y", "z"]].values)
+                distances, indices = nn.kneighbors(
+                    root_data.reset_index()[["x", "y", "z"]].values
+                )
+                distances = distances.flatten()
+                indices = indices.flatten()
 
-            info_df = pd.DataFrame(index=root_data.index)
-            info_df["level2_id"] = level2_data.index[indices]
-            info_df["distance_to_level2_node"] = distances
+                info_df = pd.DataFrame(index=root_data.index)
+                info_df["level2_id"] = level2_data.index[indices]
+                info_df["distance_to_level2_node"] = distances
+            except Exception as e:
+                if n_tries > 0:
+                    sleep(self.wait_time)
+                    return _map_to_level2_for_root(
+                        root_id, root_data, n_tries=n_tries - 1
+                    )
+                else:
+                    raise e
             return info_df
 
         with tqdm_joblib(
-            desc="Mapping to level2",
+            desc="Mapping to level2 nodes",
             total=len(self.features_.index.get_level_values("current_id").unique()),
             disable=self.verbose < 1,
         ):
             info_dfs = Parallel(n_jobs=-1)(
                 delayed(_map_to_level2_for_root)(root_id, root_data)
-                for root_id, root_data in self.features_.groupby("versioned_id")
+                for root_id, root_data in self.features_.groupby("current_id")
             )
 
         info_df = pd.concat(info_dfs)

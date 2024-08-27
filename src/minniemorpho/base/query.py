@@ -1,5 +1,7 @@
-from caveclient.frameworkclient import CAVEclientFull
 from typing import Optional
+
+from caveclient.frameworkclient import CAVEclientFull
+
 
 class BaseQuery:
     def __init__(
@@ -13,3 +15,4 @@ class BaseQuery:
         self.client = client
         self.verbose = verbose
         self.n_jobs = n_jobs
+        self.wait_time = 0.5
