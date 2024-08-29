@@ -9,6 +9,7 @@ class BaseQuery:
         client: CAVEclientFull,
         verbose: bool = False,
         n_jobs: Optional[int] = None,
+        continue_on_error: bool = False,
         *args,
         **kwargs,
     ):
@@ -16,3 +17,4 @@ class BaseQuery:
         self.verbose = verbose
         self.n_jobs = n_jobs
         self.wait_time = 0.5
+        self.continue_on_error = continue_on_error
