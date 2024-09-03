@@ -2,9 +2,7 @@ from typing import Optional
 
 import numpy as np
 from caveclient.frameworkclient import CAVEclientFull
-from joblib import Parallel, delayed
 from numpy.typing import ArrayLike
-from tqdm_joblib import tqdm_joblib
 
 
 class BaseQuery:

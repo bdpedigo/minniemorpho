@@ -9,7 +9,7 @@ from tqdm_joblib import tqdm_joblib
 from connectomics.common import sharding
 from connectomics.segclr.reader import DATA_URL_FROM_KEY_BYTEWIDTH64, EmbeddingReader
 
-from ..base import BaseQuery
+from .base import BaseQuery
 
 # DATA_URL_FROM_KEY_BYTEWIDTH64["microns_v943"] = (
 #     "gs://iarpa_microns/minnie/minnie65/embeddings_m943/segclr_nm_coord_public_offset_csvzips"

@@ -5,10 +5,9 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
-from sklearn.neighbors import NearestNeighbors
 from tqdm_joblib import tqdm_joblib
 
-from ..base import BaseQuery
+from .base import BaseQuery
 
 
 def _format_l2_data(level2_data: dict) -> pd.DataFrame:
@@ -16,15 +15,21 @@ def _format_l2_data(level2_data: dict) -> pd.DataFrame:
     if not level2_data.empty:
         # TODO handle empty cache better
         # TODO just make this happen all at once with a single apply/
-        level2_data["x"] = level2_data["rep_coord_nm"].apply(
-            lambda x: x[0] if x is not None else None
-        ).astype(int)
-        level2_data["y"] = level2_data["rep_coord_nm"].apply(
-            lambda x: x[1] if x is not None else None
-        ).astype(int)
-        level2_data["z"] = level2_data["rep_coord_nm"].apply(
-            lambda x: x[2] if x is not None else None
-        ).astype(int)
+        level2_data["x"] = (
+            level2_data["rep_coord_nm"]
+            .apply(lambda x: x[0] if x is not None else None)
+            .astype(int)
+        )
+        level2_data["y"] = (
+            level2_data["rep_coord_nm"]
+            .apply(lambda x: x[1] if x is not None else None)
+            .astype(int)
+        )
+        level2_data["z"] = (
+            level2_data["rep_coord_nm"]
+            .apply(lambda x: x[2] if x is not None else None)
+            .astype(int)
+        )
         level2_data = level2_data.drop(columns=["rep_coord_nm"])
 
         level2_data.index.name = "level2_id"
