@@ -1,12 +1,9 @@
-from time import sleep
 from typing import Optional
 
 import gcsfs
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
-from numpy.typing import ArrayLike
-from sklearn.neighbors import NearestNeighbors
 from tqdm_joblib import tqdm_joblib
 
 from connectomics.common import sharding
@@ -43,29 +40,9 @@ def get_reader(key: str, filesystem, num_shards: Optional[int] = None):
     return EmbeddingReader(filesystem, url, sharder)
 
 
-def _format_l2_data(level2_data: dict) -> pd.DataFrame:
-    level2_data = pd.DataFrame(level2_data).T
-    if not level2_data.empty:
-        # TODO handle empty cache better
-        # TODO just make this happen all at once with a single apply/
-        level2_data["x"] = level2_data["rep_coord_nm"].apply(
-            lambda x: x[0] if x is not None else None
-        )
-        level2_data["y"] = level2_data["rep_coord_nm"].apply(
-            lambda x: x[1] if x is not None else None
-        )
-        level2_data["z"] = level2_data["rep_coord_nm"].apply(
-            lambda x: x[2] if x is not None else None
-        )
-
-        level2_data.index.name = "level2_id"
-        level2_data.index = level2_data.index.astype(int)
-    return level2_data
-
-
 def _format_embedding_343(embedding: dict) -> pd.DataFrame:
     embedding_df = pd.DataFrame(embedding).T
-    embedding_df.index.names = ["current_id", "versioned_id", "x", "y", "z"]
+    embedding_df.index.names = ["root_id", "versioned_id", "x", "y", "z"]
     embedding_df["x_nm"] = embedding_df.index.get_level_values("x") * 32
     embedding_df["y_nm"] = embedding_df.index.get_level_values("y") * 32
     embedding_df["z_nm"] = embedding_df.index.get_level_values("z") * 40
@@ -85,7 +62,7 @@ def _format_embedding_343(embedding: dict) -> pd.DataFrame:
 
 def _format_embedding(embedding: dict) -> pd.DataFrame:
     embedding_df = pd.DataFrame(embedding).T
-    embedding_df.index.names = ["current_id", "versioned_id", "x", "y", "z"]
+    embedding_df.index.names = ["root_id", "versioned_id", "x", "y", "z"]
     embedding_df = embedding_df.reset_index(level=["x", "y", "z"], drop=False)
     # embedding_df["x"] = embedding_df["x"] * 32
     # embedding_df["y"] = embedding_df["y"] * 32
@@ -102,17 +79,13 @@ def _format_embedding(embedding: dict) -> pd.DataFrame:
 
 
 class SegCLRQuery(BaseQuery):
-    def __init__(self, client, *args, version: int = 943, **kwargs):
+    def __init__(self, client, *args, version: int = 943, components=None, **kwargs):
         super().__init__(client, *args, **kwargs)
         self.version = version
         self.timestamp = client.materialize.get_timestamp(self.version)
+        self.components = components
 
-    def set_query_ids(self, query_ids: ArrayLike):
-        # TODO input validation
-        query_ids = np.unique(query_ids)
-        self.query_ids = query_ids
-
-    def map_to_version(self):
+    def _map_to_version(self):
         def _get_backward_id_map_for_chunk(chunk):
             out = self.client.chunkedgraph.get_past_ids(
                 chunk, timestamp_past=self.timestamp
@@ -148,26 +121,13 @@ class SegCLRQuery(BaseQuery):
         self.forward_id_map_ = forward_id_map
         self.backward_id_map_ = backward_id_map
 
-    def set_query_bounds(self, bounds: ArrayLike):
-        assert bounds.shape == (2, 3)
-        self.bounds = bounds
-        self.bounds_seg = (bounds / np.array([8, 8, 40])).astype(int)
-
-    def _crop_to_bounds(self, dataframe):
-        if not hasattr(self, "bounds"):
-            return dataframe
-        x_min, y_min, z_min = self.bounds[0]
-        x_max, y_max, z_max = self.bounds[1]
-        query_str = "x >= @x_min & x <= @x_max"
-        query_str += " & y >= @y_min & y <= @y_max"
-        query_str += " & z >= @z_min & z <= @z_max"
-        return dataframe.query(query_str)
-
     def _get_reader(self):
         PUBLIC_GCSFS = gcsfs.GCSFileSystem(token="anon")
         return get_reader(f"microns_v{self.version}", PUBLIC_GCSFS)
 
-    def get_embeddings(self):
+    def get_features(self):
+        self._map_to_version()
+
         # TODO these are hard-coded for now
 
         embedding_reader = self._get_reader()
@@ -181,7 +141,21 @@ class SegCLRQuery(BaseQuery):
                 out = embedding_reader[past_id]
                 new_out = {}
                 for xyz, embedding_vector in out.items():
+                    if self.components is not None:
+                        if isinstance(self.components, int):
+                            embedding_vector = embedding_vector[: self.components]
+                        elif isinstance(self.components, slice):
+                            embedding_vector = embedding_vector[self.components]
+                        elif isinstance(self.components, (list, tuple)):
+                            embedding_vector = embedding_vector[
+                                self.components[0] : self.components[1]
+                            ]
+                        else:
+                            raise ValueError(
+                                f"Invalid type for components : {type(self.components )}"
+                            )
                     new_out[(root_id, past_id, *xyz)] = embedding_vector
+
                 new_out = _format_embedding(new_out)
                 new_out = self._crop_to_bounds(new_out)
             except KeyError:
@@ -194,7 +168,7 @@ class SegCLRQuery(BaseQuery):
             total=len(versioned_query_ids),
             disable=self.verbose < 1,
         ):
-            embedding_dfs = Parallel(n_jobs=self.n_jobs)(
+            embedding_dfs = Parallel(n_jobs=self.n_jobs, timeout=99999)(
                 delayed(_get_embeddings_for_versioned_id)(past_id)
                 for past_id in versioned_query_ids
             )
@@ -228,62 +202,62 @@ class SegCLRQuery(BaseQuery):
 
         self.features_ = embedding_df
 
-    def map_to_level2(self):
-        def _map_to_level2_for_root(root_id, root_data, n_tries=3):
-            try:
-                if hasattr(self, "bounds_seg"):
-                    bounds = self.bounds_seg.T
-                else:
-                    bounds = None
-                level2_ids = self.client.chunkedgraph.get_leaves(
-                    root_id, stop_layer=2, bounds=bounds
-                )
-                level2_data = self.client.l2cache.get_l2data(
-                    level2_ids, attributes=["rep_coord_nm"]
-                )
-                level2_data = _format_l2_data(level2_data)
-                if not level2_data.empty:
-                    nn = NearestNeighbors(n_neighbors=1)
-                    nn.fit(level2_data[["x", "y", "z"]].values)
-                    distances, indices = nn.kneighbors(
-                        root_data.reset_index()[["x", "y", "z"]].values
-                    )
-                    distances = distances.flatten()
-                    indices = indices.flatten()
+    # def map_to_level2(self):
+    #     def _map_to_level2_for_root(root_id, root_data, n_tries=3):
+    #         try:
+    #             if hasattr(self, "bounds_seg"):
+    #                 bounds = self.bounds_seg.T
+    #             else:
+    #                 bounds = None
+    #             level2_ids = self.client.chunkedgraph.get_leaves(
+    #                 root_id, stop_layer=2, bounds=bounds
+    #             )
+    #             level2_data = self.client.l2cache.get_l2data(
+    #                 level2_ids, attributes=["rep_coord_nm"]
+    #             )
+    #             level2_data = _format_l2_data(level2_data)
+    #             if not level2_data.empty:
+    #                 nn = NearestNeighbors(n_neighbors=1)
+    #                 nn.fit(level2_data[["x", "y", "z"]].values)
+    #                 distances, indices = nn.kneighbors(
+    #                     root_data.reset_index()[["x", "y", "z"]].values
+    #                 )
+    #                 distances = distances.flatten()
+    #                 indices = indices.flatten()
 
-                    info_df = pd.DataFrame(index=root_data.index)
-                    info_df["level2_id"] = level2_data.index[indices]
-                    info_df["distance_to_level2_node"] = distances
-                else:
-                    info_df = pd.DataFrame(
-                        index=root_data.index,
-                        columns=["level2_id", "distance_to_level2_node"],
-                    )
-            except Exception as e:  # TODO make this specific to server errors
-                if n_tries > 0:
-                    sleep(self.wait_time)
-                    return _map_to_level2_for_root(
-                        root_id, root_data, n_tries=n_tries - 1
-                    )
-                else:
-                    if self.continue_on_error:
-                        info_df = pd.DataFrame(
-                            index=root_data.index,
-                            columns=["level2_id", "distance_to_level2_node"],
-                        )
-                    else:
-                        raise e
-            return info_df
+    #                 info_df = pd.DataFrame(index=root_data.index)
+    #                 info_df["level2_id"] = level2_data.index[indices]
+    #                 info_df["distance_to_level2_node"] = distances
+    #             else:
+    #                 info_df = pd.DataFrame(
+    #                     index=root_data.index,
+    #                     columns=["level2_id", "distance_to_level2_node"],
+    #                 )
+    #         except Exception as e:  # TODO make this specific to server errors
+    #             if n_tries > 0:
+    #                 sleep(self.wait_time)
+    #                 return _map_to_level2_for_root(
+    #                     root_id, root_data, n_tries=n_tries - 1
+    #                 )
+    #             else:
+    #                 if self.continue_on_error:
+    #                     info_df = pd.DataFrame(
+    #                         index=root_data.index,
+    #                         columns=["level2_id", "distance_to_level2_node"],
+    #                     )
+    #                 else:
+    #                     raise e
+    #         return info_df
 
-        with tqdm_joblib(
-            desc="Mapping to level2 nodes",
-            total=len(self.features_.index.get_level_values("current_id").unique()),
-            disable=self.verbose < 1,
-        ):
-            info_dfs = Parallel(n_jobs=-1)(
-                delayed(_map_to_level2_for_root)(root_id, root_data)
-                for root_id, root_data in self.features_.groupby("current_id")
-            )
+    #     with tqdm_joblib(
+    #         desc="Mapping to level2 nodes",
+    #         total=len(self.features_.index.get_level_values("current_id").unique()),
+    #         disable=self.verbose < 1,
+    #     ):
+    #         info_dfs = Parallel(n_jobs=-1)(
+    #             delayed(_map_to_level2_for_root)(root_id, root_data)
+    #             for root_id, root_data in self.features_.groupby("current_id")
+    #         )
 
-        info_df = pd.concat(info_dfs)
-        self.level2_mapping_ = info_df
+    #     info_df = pd.concat(info_dfs)
+    #     self.level2_mapping_ = info_df
