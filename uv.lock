@@ -988,7 +988,7 @@ requires-dist = [
     { name = "caveclient", specifier = ">=5.25.2" },
     { name = "connectomics", git = "https://github.com/google-research/connectomics.git?rev=9a1aa4b62de2574f7a083176d194f2a0b894ea6f" },
     { name = "gcsfs", specifier = ">=2024.6.1" },
-    { name = "pandas" },
+    { name = "pandas", specifier = ">=2.2.2" },
     { name = "scikit-learn", specifier = ">=1.5.1" },
     { name = "skops", specifier = ">=0.10.0" },
     { name = "tqdm-joblib", specifier = ">=0.0.4" },
