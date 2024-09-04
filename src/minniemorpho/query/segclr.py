@@ -11,9 +11,6 @@ from connectomics.segclr.reader import DATA_URL_FROM_KEY_BYTEWIDTH64, EmbeddingR
 
 from .base import BaseQuery
 
-# DATA_URL_FROM_KEY_BYTEWIDTH64["microns_v943"] = (
-#     "gs://iarpa_microns/minnie/minnie65/embeddings_m943/segclr_nm_coord_public_offset_csvzips"
-# )
 DATA_URL_FROM_KEY_BYTEWIDTH8 = {
     "microns_v943": "gs://iarpa_microns/minnie/minnie65/embeddings_m943/segclr_nm_coord_public_offset_csvzips"
 }
@@ -64,13 +61,6 @@ def _format_embedding(embedding: dict) -> pd.DataFrame:
     embedding_df = pd.DataFrame(embedding).T
     embedding_df.index.names = ["root_id", "versioned_id", "x", "y", "z"]
     embedding_df = embedding_df.reset_index(level=["x", "y", "z"], drop=False)
-    # embedding_df["x"] = embedding_df["x"] * 32
-    # embedding_df["y"] = embedding_df["y"] * 32
-    # embedding_df["z"] = embedding_df["z"] * 40
-    # mystery_offset = np.array([13824, 13824, 14816]) * np.array([8, 8, 40])
-    # embedding_df["x"] += mystery_offset[0]
-    # embedding_df["y"] += mystery_offset[1]
-    # embedding_df["z"] += mystery_offset[2]
     embedding_df["x"] = embedding_df["x"].astype(int)
     embedding_df["y"] = embedding_df["y"].astype(int)
     embedding_df["z"] = embedding_df["z"].astype(int)
