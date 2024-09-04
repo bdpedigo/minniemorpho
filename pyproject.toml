@@ -27,5 +27,5 @@ connectomics = { git = "https://github.com/google-research/connectomics.git", re
 # [tool.hatch.build.targets.wheel.force-include]
 # "models/*.skops" = "models/*.skops"
 
-[tool.hatch.build.force-include]
-"models" = "models"
+# [tool.hatch.build.force-include]
+# "models" = "models"
