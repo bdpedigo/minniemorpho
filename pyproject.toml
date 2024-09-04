@@ -23,3 +23,6 @@ dev-dependencies = ["ipykernel>=6.29.5", "ipywidgets>=8.1.5"]
 
 [tool.uv.sources]
 connectomics = { git = "https://github.com/google-research/connectomics.git", rev = "9a1aa4b62de2574f7a083176d194f2a0b894ea6f" }
+
+[tool.hatch.build.targets.wheel.force-include]
+"models/*.skops" = "models/*.skops"
