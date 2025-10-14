@@ -82,6 +82,13 @@ class Level2Query(BaseQuery):
         root_level2_mapping = pd.DataFrame(
             {"root_id": roots_broadcast, "level2_id": level2_ids}
         )
+        root_level2_mapping.sort_values("root_id", inplace=True)
+        
+        if not root_level2_mapping["level2_id"].is_unique:
+            root_level2_mapping.drop_duplicates(
+                subset="level2_id", inplace=True, keep="last"
+            )
+
         assert root_level2_mapping["level2_id"].is_unique
 
         self.root_level2_mapping_ = root_level2_mapping
