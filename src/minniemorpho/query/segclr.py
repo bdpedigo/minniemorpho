@@ -92,7 +92,9 @@ class SegCLRQuery(BaseQuery):
             total=n_chunks,
             disable=self.verbose < 1,
         ):
-            backward_id_maps = Parallel(n_jobs=self.n_jobs)(
+            # threading backend: this is network I/O, not CPU work, so threads
+            # avoid per-process memory duplication that processes would incur
+            backward_id_maps = Parallel(n_jobs=self.n_jobs, backend="threading")(
                 delayed(_get_backward_id_map_for_chunk)(chunk) for chunk in chunks
             )
 
@@ -158,7 +160,11 @@ class SegCLRQuery(BaseQuery):
             total=len(versioned_query_ids),
             disable=self.verbose < 1,
         ):
-            embedding_dfs = Parallel(n_jobs=self.n_jobs, timeout=99999)(
+            # threading backend: this is network I/O, not CPU work, so threads
+            # avoid per-process memory duplication that processes would incur
+            embedding_dfs = Parallel(
+                n_jobs=self.n_jobs, timeout=99999, backend="threading"
+            )(
                 delayed(_get_embeddings_for_versioned_id)(past_id)
                 for past_id in versioned_query_ids
             )

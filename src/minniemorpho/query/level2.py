@@ -68,7 +68,9 @@ class Level2Query(BaseQuery):
             total=len(self.query_ids),
             disable=self.verbose < 1,
         ):
-            level2_ids_by_root = Parallel(n_jobs=self.n_jobs)(
+            # threading backend: this is network I/O, not CPU work, so threads
+            # avoid per-process memory duplication that processes would incur
+            level2_ids_by_root = Parallel(n_jobs=self.n_jobs, backend="threading")(
                 delayed(_get_level2_for_root)(root_id) for root_id in self.query_ids
             )
 
@@ -121,7 +123,9 @@ class Level2Query(BaseQuery):
             total=len(level2_id_chunks),
             disable=self.verbose < 1,
         ):
-            chunked_level2_data = Parallel(n_jobs=self.n_jobs)(
+            # threading backend: this is network I/O, not CPU work, so threads
+            # avoid per-process memory duplication that processes would incur
+            chunked_level2_data = Parallel(n_jobs=self.n_jobs, backend="threading")(
                 delayed(_get_level2_data_for_chunk)(chunk) for chunk in level2_id_chunks
             )
 
