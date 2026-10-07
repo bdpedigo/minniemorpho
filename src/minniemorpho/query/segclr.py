@@ -1,3 +1,7 @@
+import io
+import os
+import struct
+import zipfile
 from typing import Optional
 
 import gcsfs
@@ -68,6 +72,109 @@ def _format_embedding(embedding: dict) -> pd.DataFrame:
     return embedding_df
 
 
+def _select_components(embeddings: np.ndarray, components) -> np.ndarray:
+    if components is None:
+        return embeddings
+    elif isinstance(components, int):
+        return embeddings[:, :components]
+    elif isinstance(components, slice):
+        return embeddings[:, components]
+    elif isinstance(components, (list, tuple)):
+        return embeddings[:, components[0] : components[1]]
+    else:
+        raise ValueError(f"Invalid type for components : {type(components)}")
+
+
+def _read_embeddings_in_bounds(
+    embedding_reader: EmbeddingReader,
+    root_id: int,
+    seg_id: int,
+    bounds: Optional[np.ndarray] = None,
+    components=None,
+    chunksize: int = 50_000,
+) -> pd.DataFrame:
+    """Read one segment's CSV from its shard, cropping each chunk to bounds.
+
+    Gives the same output as `EmbeddingReader[seg_id]` -> `_format_embedding` ->
+    `_crop_to_bounds`, but holds at most the compressed member, never the full
+    (possibly >1 GB) CSV or its parsed Python objects. Raises KeyError if the
+    segment is not found.
+    """
+    shard = embedding_reader._sharder(seg_id)
+    zip_path = os.path.join(embedding_reader._zipdir, f"{shard}.zip")
+    fs = embedding_reader._filesystem
+    with fs.open(zip_path) as f:
+        with zipfile.ZipFile(f) as z:
+            info = z.getinfo(f"{seg_id}.csv")
+        file_size = f.size
+
+    # fetch the whole compressed member in one ranged request: streaming it through
+    # the file object instead does many sequential small fetches and is ~2x slower.
+    # the local header's extra field can differ from the central directory's, so
+    # over-fetch a little and fetch any remainder if that was not enough
+    start = info.header_offset
+    end = min(start + 30 + len(info.filename) + 65_536 + info.compress_size, file_size)
+    member = fs.cat_file(zip_path, start=start, end=end)
+    name_length, extra_length = struct.unpack("<HH", member[26:30])
+    data_start = 30 + name_length + extra_length
+    if data_start + info.compress_size > len(member):
+        member += fs.cat_file(
+            zip_path,
+            start=start + len(member),
+            end=start + data_start + info.compress_size,
+        )
+
+    kept = []
+    buffer = io.BytesIO(member)
+    buffer.seek(data_start)
+    # decompress and parse in chunks so that the full CSV never sits in memory
+    with zipfile.ZipExtFile(buffer, "r", info) as c:
+        # "high" is pure C; "round_trip" takes the GIL per value and is ~10x slower
+        # with many threads
+        for chunk in pd.read_csv(
+            c, header=None, chunksize=chunksize, float_precision="high"
+        ):
+            # columns are node_id, x, y, z, embedding...
+            xyz = chunk.iloc[:, 1:4].to_numpy(dtype=np.float64).astype(int)
+            if bounds is not None:
+                mask = np.all((xyz >= bounds[0]) & (xyz <= bounds[1]), axis=1)
+                chunk = chunk[mask]
+                xyz = xyz[mask]
+            if len(chunk) == 0:
+                continue
+            embeddings = chunk.iloc[:, 4:].to_numpy(dtype=np.float64)
+            embeddings = _select_components(embeddings, components)
+            # the released embeddings are float32 values: "high" can be 1 ulp off
+            # in float64, and rounding through float32 gives exactly what python's
+            # float() parses
+            embeddings = embeddings.astype(np.float32).astype(np.float64)
+            kept.append((xyz, embeddings))
+    del buffer, member
+
+    if kept:
+        xyz = np.concatenate([k[0] for k in kept])
+        embeddings = np.concatenate([k[1] for k in kept])
+    else:
+        n_cols = _select_components(np.empty((0, 0)), components).shape[1]
+        xyz = np.empty((0, 3), dtype=int)
+        embeddings = np.empty((0, n_cols), dtype=np.float64)
+
+    n = len(xyz)
+    index = pd.MultiIndex.from_arrays(
+        [
+            np.full(n, root_id, dtype=np.int64),
+            np.full(n, seg_id, dtype=np.int64),
+            xyz[:, 0],
+            xyz[:, 1],
+            xyz[:, 2],
+        ],
+        names=["root_id", "versioned_id", "x", "y", "z"],
+    )
+    # object dtype for the column labels matches what `_format_embedding` gives
+    columns = pd.Index(list(range(embeddings.shape[1])), dtype=object)
+    return pd.DataFrame(embeddings, index=index, columns=columns)
+
+
 class SegCLRQuery(BaseQuery):
     def __init__(self, client, *args, version: int = 943, components=None, **kwargs):
         super().__init__(client, *args, **kwargs)
@@ -130,26 +237,15 @@ class SegCLRQuery(BaseQuery):
             past_id = int(past_id)
             root_id = self.forward_id_map_[past_id]
             try:
-                out = embedding_reader[past_id]
-                new_out = {}
-                for xyz, embedding_vector in out.items():
-                    if self.components is not None:
-                        if isinstance(self.components, int):
-                            embedding_vector = embedding_vector[: self.components]
-                        elif isinstance(self.components, slice):
-                            embedding_vector = embedding_vector[self.components]
-                        elif isinstance(self.components, (list, tuple)):
-                            embedding_vector = embedding_vector[
-                                self.components[0] : self.components[1]
-                            ]
-                        else:
-                            raise ValueError(
-                                f"Invalid type for components : {type(self.components )}"
-                            )
-                    new_out[(root_id, past_id, *xyz)] = embedding_vector
-
-                new_out = _format_embedding(new_out)
-                new_out = self._crop_to_bounds(new_out)
+                # stream and crop per chunk: whole-segment CSVs can exceed 1 GB,
+                # and parsing them in full before cropping caused OOMs
+                new_out = _read_embeddings_in_bounds(
+                    embedding_reader,
+                    root_id,
+                    past_id,
+                    bounds=getattr(self, "bounds", None),
+                    components=self.components,
+                )
             except KeyError:
                 new_out = None
             return new_out
