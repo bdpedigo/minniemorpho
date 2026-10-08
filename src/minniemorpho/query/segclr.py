@@ -95,10 +95,10 @@ def _read_embeddings_in_bounds(
 ) -> pd.DataFrame:
     """Read one segment's CSV from its shard, cropping each chunk to bounds.
 
-    Gives the same output as `EmbeddingReader[seg_id]` -> `_format_embedding` ->
-    `_crop_to_bounds`, but holds at most the compressed member, never the full
-    (possibly >1 GB) CSV or its parsed Python objects. Raises KeyError if the
-    segment is not found.
+    Gives the same values as `EmbeddingReader[seg_id]` -> `_format_embedding` ->
+    `_crop_to_bounds` (stored as float32), but holds at most the compressed member,
+    never the full (possibly >1 GB) CSV or its parsed Python objects. Raises KeyError
+    if the segment is not found.
     """
     shard = embedding_reader._sharder(seg_id)
     zip_path = os.path.join(embedding_reader._zipdir, f"{shard}.zip")
@@ -145,9 +145,8 @@ def _read_embeddings_in_bounds(
             embeddings = chunk.iloc[:, 4:].to_numpy(dtype=np.float64)
             embeddings = _select_components(embeddings, components)
             # the released embeddings are float32 values: "high" can be 1 ulp off
-            # in float64, and rounding through float32 gives exactly what python's
-            # float() parses
-            embeddings = embeddings.astype(np.float32).astype(np.float64)
+            # in float64, and rounding to float32 recovers them exactly
+            embeddings = embeddings.astype(np.float32)
             kept.append((xyz, embeddings))
     del buffer, member
 
@@ -157,7 +156,7 @@ def _read_embeddings_in_bounds(
     else:
         n_cols = _select_components(np.empty((0, 0)), components).shape[1]
         xyz = np.empty((0, 3), dtype=int)
-        embeddings = np.empty((0, n_cols), dtype=np.float64)
+        embeddings = np.empty((0, n_cols), dtype=np.float32)
 
     n = len(xyz)
     index = pd.MultiIndex.from_arrays(
